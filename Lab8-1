@@ -1,0 +1,254 @@
+import java.io.InputStreamReader;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Scanner;
+
+public class NbuSimple {
+
+    static class Currency {
+        private int    numericCode;  // цифровий код ISO 4217
+        private String name;         // назва (укр.)
+        private double rate;         // курс до гривні
+        private String code;         // літерний код (USD, EUR...)
+        private String date;         // дата курсу
+
+        public Currency(int numericCode, String name,
+                        double rate, String code, String date) {
+            this.numericCode = numericCode;
+            this.name        = name;
+            this.rate        = rate;
+            this.code        = code;
+            this.date        = date;
+        }
+
+        public double toUah(double amount) {
+            return amount * rate;
+        }
+
+        public double fromUah(double uah) {
+            return uah / rate;
+        }
+
+        public int    getNumericCode() { return numericCode; }
+        public String getName()        { return name; }
+        public double getRate()        { return rate; }
+        public String getCode()        { return code; }
+        public String getDate()        { return date; }
+
+        @Override
+        public String toString() {
+            return String.format("%-6s | %-30s | %8.4f UAH | %s",
+                    code, name, rate, date);
+        }
+    }
+
+
+    private static final String NBU_URL =
+            "https://bank.gov.ua/NBUStatService/v1/statdirectory/exchange?json";
+
+    /**
+     * Завантажує курси валют від НБУ та повертає список Currency.
+     */
+    static List<Currency> fetchRates() throws Exception {
+        var url        = new URL(NBU_URL);
+        var connection = url.openConnection();
+        connection.setRequestProperty("Accept", "application/json");
+        connection.connect();
+
+        var scanner = new Scanner(new InputStreamReader(
+                connection.getInputStream(), "UTF-8"));
+        var sb = new StringBuilder();
+        while (scanner.hasNextLine()) {
+            sb.append(scanner.nextLine());
+        }
+        scanner.close();
+
+        return parseJson(sb.toString());
+    }
+
+    static List<Currency> parseJson(String json) {
+        List<Currency> list = new ArrayList<>();
+
+        String[] objects = json.split("\\},\\{");
+
+        for (String obj : objects) {
+            try {
+                int    r030 = Integer.parseInt(extract(obj, "r030"));
+                String txt  = extract(obj, "txt");
+                double rate = Double.parseDouble(extract(obj, "rate"));
+                String cc   = extract(obj, "cc");
+                String date = extract(obj, "exchangedate");
+                list.add(new Currency(r030, txt, rate, cc, date));
+            } catch (Exception ignored) {}
+        }
+        return list;
+    }
+
+    /**
+     * Витягує значення поля з JSON-рядка.
+     */
+    static String extract(String obj, String field) {
+        String key    = "\"" + field + "\":";
+        int    start  = obj.indexOf(key);
+        if (start == -1) return "";
+        start += key.length();
+
+        // Якщо рядкове значення (в лапках)
+        if (obj.charAt(start) == '"') {
+            start++;
+            int end = obj.indexOf('"', start);
+            return obj.substring(start, end);
+        }
+        // Якщо числове значення
+        int end = obj.indexOf(',', start);
+        if (end == -1) end = obj.indexOf('}', start);
+        if (end == -1) end = obj.length();
+        return obj.substring(start, end).trim();
+    }
+
+    public static void main(String[] args) {
+        Scanner sc = new Scanner(System.in);
+
+        System.out.println("╔══════════════════════════════════════╗");
+        System.out.println("║   💰 Курси валют НБУ                 ║");
+        System.out.println("║   Джерело: bank.gov.ua               ║");
+        System.out.println("╚══════════════════════════════════════╝");
+
+        List<Currency> rates = null;
+
+        boolean running = true;
+        while (running) {
+            System.out.println("\n┌──────────────────────────────┐");
+            System.out.println("│  [1] Всі курси валют         │");
+            System.out.println("│  [2] Знайти валюту за кодом  │");
+            System.out.println("│  [3] Топ-5 найдорожчих       │");
+            System.out.println("│  [4] Конвертер               │");
+            System.out.println("│  [0] Вихід                   │");
+            System.out.println("└──────────────────────────────┘");
+            System.out.print("  Ваш вибір: ");
+            String choice = sc.nextLine().trim();
+
+            if (choice.equals("0")) {
+                System.out.println("👋 До побачення!");
+                break;
+            }
+
+            if (rates == null) {
+                System.out.println("  Завантаження даних з НБУ...");
+                try {
+                    rates = fetchRates();
+                    System.out.println("  ✅ Отримано " + rates.size() + " валют");
+                } catch (Exception e) {
+                    System.out.println("  ❌ Помилка: " + e.getMessage());
+                    System.out.println("  Перевірте інтернет-з'єднання.");
+                    continue;
+                }
+            }
+
+            switch (choice) {
+                case "1" -> showAll(rates);
+                case "2" -> findByCode(rates, sc);
+                case "3" -> showTop(rates);
+                case "4" -> convert(rates, sc);
+                default  -> System.out.println("  ⚠️ Невірний вибір.");
+            }
+        }
+        sc.close();
+    }
+
+    // ── Пункти меню ───────────────────────────
+
+    static void showAll(List<Currency> rates) {
+        System.out.printf("%n%-6s | %-30s | %-12s | %-12s%n",
+                "Код", "Назва", "Курс (UAH)", "Дата");
+        System.out.println("─".repeat(68));
+        for (Currency c : rates) {
+            System.out.println(c);
+        }
+        System.out.println("\nВсього: " + rates.size() + " валют");
+    }
+
+    static void findByCode(List<Currency> rates, Scanner sc) {
+        System.out.print("\n🔍 Введіть код валюти (напр. USD): ");
+        String code = sc.nextLine().trim().toUpperCase();
+
+        Currency found = null;
+        for (Currency c : rates) {
+            if (c.getCode().equalsIgnoreCase(code)) {
+                found = c;
+                break;
+            }
+        }
+
+        if (found == null) {
+            System.out.println("  ❌ Валюту '" + code + "' не знайдено.");
+        } else {
+            System.out.println("\n┌─────────────────────────────────┐");
+            System.out.printf( "│  %-31s│%n", found.getName());
+            System.out.println("├─────────────────────────────────┤");
+            System.out.printf( "│  Код:    %-23s│%n", found.getCode());
+            System.out.printf( "│  Курс:   %-23.4f│%n", found.getRate());
+            System.out.printf( "│  Дата:   %-23s│%n", found.getDate());
+            System.out.printf( "│  ISO:    %-23d│%n", found.getNumericCode());
+            System.out.println("└─────────────────────────────────┘");
+        }
+    }
+
+    static void showTop(List<Currency> rates) {
+        List<Currency> sorted = new ArrayList<>(rates);
+        for (int i = 0; i < sorted.size() - 1; i++) {
+            for (int j = 0; j < sorted.size() - i - 1; j++) {
+                if (sorted.get(j).getRate() < sorted.get(j + 1).getRate()) {
+                    Currency tmp = sorted.get(j);
+                    sorted.set(j, sorted.get(j + 1));
+                    sorted.set(j + 1, tmp);
+                }
+            }
+        }
+
+        System.out.println("\n🏆 Топ-5 найдорожчих валют:\n");
+        System.out.printf("%-4s %-6s %-30s %-12s%n", "№", "Код", "Назва", "Курс (UAH)");
+        System.out.println("─".repeat(55));
+        for (int i = 0; i < 5 && i < sorted.size(); i++) {
+            Currency c = sorted.get(i);
+            System.out.printf("%-4d %-6s %-30s %.4f%n",
+                    i + 1, c.getCode(), c.getName(), c.getRate());
+        }
+    }
+
+    static void convert(List<Currency> rates, Scanner sc) {
+        System.out.print("\n💱 Код валюти (напр. USD): ");
+        String code = sc.nextLine().trim().toUpperCase();
+
+        Currency found = null;
+        for (Currency c : rates) {
+            if (c.getCode().equalsIgnoreCase(code)) { found = c; break; }
+        }
+
+        if (found == null) {
+            System.out.println("  ❌ Валюту '" + code + "' не знайдено.");
+            return;
+        }
+
+        System.out.printf("  Курс: 1 %s = %.4f UAH%n", found.getCode(), found.getRate());
+        System.out.println("  [1] " + code + " → UAH");
+        System.out.println("  [2] UAH → " + code);
+        System.out.print("  Вибір: ");
+        String dir = sc.nextLine().trim();
+
+        System.out.print("  Сума: ");
+        try {
+            double amount = Double.parseDouble(sc.nextLine().trim().replace(",", "."));
+            if ("1".equals(dir)) {
+                System.out.printf("%n  %.2f %s = %.2f UAH%n",
+                        amount, code, found.toUah(amount));
+            } else if ("2".equals(dir)) {
+                System.out.printf("%n  %.2f UAH = %.4f %s%n",
+                        amount, found.fromUah(amount), code);
+            }
+        } catch (NumberFormatException e) {
+            System.out.println("  ⚠️ Неправильна сума.");
+        }
+    }
+}
